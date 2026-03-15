@@ -7,15 +7,21 @@
 let
   cfg = config.akeyless-auth;
 
-  configJson = pkgs.writeText "akeyless-auth-config.json" (builtins.toJSON {
+  # Generate config file matching shikumi's expected YAML structure.
+  configYaml = pkgs.writeText "akeyless-auth.yaml" (builtins.toJSON {
     key_label = cfg.keyLabel;
     key_protection = cfg.keyProtection;
     socket_path = cfg.socketPath;
-    issuer = cfg.issuer;
-    expiry_secs = cfg.expirySecs;
-    subject = cfg.subject;
-    audience = cfg.audience;
-    autostart = cfg.autostart;
+    jwt = {
+      issuer = cfg.issuer;
+      expiry_secs = cfg.expirySecs;
+      subject = cfg.subject;
+      audience = cfg.audience;
+    };
+    daemon = {
+      autostart = cfg.autostart;
+      log_level = cfg.logLevel;
+    };
   });
 in {
   options.akeyless-auth = {
@@ -78,13 +84,19 @@ in {
       default = true;
       description = "Auto-start the daemon via launchd on login.";
     };
+
+    logLevel = lib.mkOption {
+      type = lib.types.str;
+      default = "info";
+      description = "Daemon log level (trace, debug, info, warn, error).";
+    };
   };
 
   config = lib.mkIf cfg.enable {
     xdg.enable = true;
 
-    # Deploy config file.
-    xdg.configFile."akeyless-auth/config.json".source = configJson;
+    # Deploy config file (shikumi discovers this via XDG path conventions).
+    xdg.configFile."akeyless-auth/akeyless-auth.yaml".source = configYaml;
 
     # launchd agent for auto-start.
     launchd.agents.akeyless-auth = lib.mkIf cfg.autostart {
@@ -99,9 +111,6 @@ in {
         KeepAlive = true;
         StandardOutPath = "${config.home.homeDirectory}/Library/Logs/AkeylessAuth/stdout.log";
         StandardErrorPath = "${config.home.homeDirectory}/Library/Logs/AkeylessAuth/stderr.log";
-        EnvironmentVariables = {
-          AKEYLESS_AUTH_CONFIG = "${config.xdg.configHome}/akeyless-auth/config.json";
-        };
       };
     };
   };

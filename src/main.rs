@@ -74,7 +74,6 @@ async fn main() -> anyhow::Result<()> {
             eprintln!("[akeyless-auth] key generated: {}", cfg.key_label);
             eprintln!("[akeyless-auth] protection: {:?}", cfg.key_protection);
 
-            // Print JWKS for convenience.
             let jwk = store.public_key_jwk(&cfg.key_label)?;
             let jwks = protocol::Jwks { keys: vec![jwk] };
             println!("{}", serde_json::to_string_pretty(&jwks)?);
@@ -97,10 +96,10 @@ async fn main() -> anyhow::Result<()> {
             let issuer = JwtTokenIssuer::new(store, cfg.key_label.clone());
             let handler = DefaultHandler::new(
                 issuer,
-                cfg.issuer.clone(),
-                cfg.subject.clone(),
-                cfg.audience.clone(),
-                cfg.expiry_secs,
+                cfg.jwt.issuer.clone(),
+                cfg.jwt.subject.clone(),
+                cfg.jwt.audience.clone(),
+                cfg.jwt.expiry_secs,
             );
             socket::serve(&cfg.socket_path, &handler).await?;
         }
@@ -118,19 +117,17 @@ async fn main() -> anyhow::Result<()> {
             };
 
             if direct {
-                // Sign directly in this process (Touch ID prompt here).
                 let issuer = JwtTokenIssuer::new(store, cfg.key_label.clone());
                 let handler = DefaultHandler::new(
                     issuer,
-                    cfg.issuer,
-                    cfg.subject,
-                    cfg.audience,
-                    cfg.expiry_secs,
+                    cfg.jwt.issuer,
+                    cfg.jwt.subject,
+                    cfg.jwt.audience,
+                    cfg.jwt.expiry_secs,
                 );
                 let resp = handler.handle(&req)?;
                 println!("{}", resp.token);
             } else {
-                // Request from daemon via socket.
                 let resp = socket::request_token(&cfg.socket_path, &req).await?;
                 println!("{}", resp.token);
             }
@@ -151,10 +148,12 @@ async fn main() -> anyhow::Result<()> {
                 if daemon_running { "running" } else { "stopped" }
             );
             eprintln!("[akeyless-auth] socket:      {}", cfg.socket_path.display());
-            eprintln!("[akeyless-auth] issuer:      {}", cfg.issuer);
-            eprintln!("[akeyless-auth] subject:     {}", cfg.subject);
-            eprintln!("[akeyless-auth] expiry:      {}s", cfg.expiry_secs);
-            eprintln!("[akeyless-auth] autostart:   {}", cfg.autostart);
+            eprintln!("[akeyless-auth] jwt.issuer:  {}", cfg.jwt.issuer);
+            eprintln!("[akeyless-auth] jwt.subject: {}", cfg.jwt.subject);
+            eprintln!("[akeyless-auth] jwt.expiry:  {}s", cfg.jwt.expiry_secs);
+            eprintln!("[akeyless-auth] jwt.audience:{}", if cfg.jwt.audience.is_empty() { " (none)" } else { &cfg.jwt.audience });
+            eprintln!("[akeyless-auth] autostart:   {}", cfg.daemon.autostart);
+            eprintln!("[akeyless-auth] log_level:   {}", cfg.daemon.log_level);
 
             if !key_exists {
                 eprintln!();

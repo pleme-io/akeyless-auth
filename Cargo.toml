@@ -29,7 +29,7 @@ anyhow = "1.0"
 thiserror = "2.0"
 chrono = "0.4"
 uuid = { version = "1", features = ["v4"] }
-dirs = "6.0"
+shikumi = { git = "https://github.com/pleme-io/shikumi" }
 
 [dev-dependencies]
 tempfile = "3"
