@@ -97,17 +97,26 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Load config from `~/.config/akeyless-auth/config.json`, falling back to defaults.
+    /// Load config from `AKEYLESS_AUTH_CONFIG` env var or
+    /// `~/.config/akeyless-auth/config.json`, falling back to defaults.
     pub fn load() -> Self {
-        let path = dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join("akeyless-auth/config.json");
+        let path = std::env::var("AKEYLESS_AUTH_CONFIG")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                dirs::config_dir()
+                    .unwrap_or_else(|| PathBuf::from("/tmp"))
+                    .join("akeyless-auth/config.json")
+            });
 
         if path.exists() {
             if let Ok(content) = std::fs::read_to_string(&path) {
                 if let Ok(config) = serde_json::from_str(&content) {
                     return config;
                 }
+                eprintln!(
+                    "[akeyless-auth] warning: failed to parse {}, using defaults",
+                    path.display()
+                );
             }
         }
 
