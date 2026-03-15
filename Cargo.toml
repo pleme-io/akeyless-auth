@@ -1,0 +1,47 @@
+[package]
+name = "akeyless-auth"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89.0"
+description = "Biometric-gated Akeyless authentication — Touch ID required for every secret access"
+license = "MIT"
+authors = ["Pleme Team <team@pleme.io>"]
+repository = "https://github.com/pleme-io/akeyless-auth"
+homepage = "https://github.com/pleme-io/akeyless-auth"
+keywords = ["akeyless", "biometric", "touchid", "security", "jwt"]
+categories = ["authentication", "command-line-utilities"]
+exclude = ["module/", "target/", "result-*", "entitlements/", "flake.nix", "flake.lock"]
+
+[[bin]]
+name = "akeyless-auth"
+path = "src/main.rs"
+
+[dependencies]
+security-framework = "3.7"
+security-framework-sys = "2.17"
+core-foundation = "0.10"
+jsonwebtoken = "10.3"
+base64 = "0.22"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1.40", features = ["full"] }
+clap = { version = "4.5", features = ["derive"] }
+anyhow = "1.0"
+thiserror = "2.0"
+chrono = "0.4"
+uuid = { version = "1", features = ["v4"] }
+dirs = "6.0"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
