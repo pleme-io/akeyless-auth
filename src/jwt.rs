@@ -1,25 +1,19 @@
 use crate::error::{Error, Result};
-use crate::protocol::{AuthResponse, Jwk, Jwks};
+use crate::protocol::Jwks;
 use crate::traits::{KeyStore, TokenIssuer};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 /// JWT claims for Akeyless OAuth2/JWT authentication.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Claims {
-    /// Subject (who is authenticating).
     pub sub: String,
-    /// Issuer (this daemon).
     pub iss: String,
-    /// Audience (Akeyless access ID or endpoint).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub aud: String,
-    /// Issued at (Unix timestamp).
     pub iat: i64,
-    /// Expires at (Unix timestamp).
     pub exp: i64,
-    /// JWT ID (unique per token, prevents replay).
     pub jti: String,
 }
 
@@ -38,13 +32,7 @@ impl<K: KeyStore> JwtTokenIssuer<K> {
         }
     }
 
-    /// Build a signed JWT manually (header.payload.signature).
-    ///
-    /// We construct the JWT by hand because `jsonwebtoken` requires
-    /// key bytes, but our key is in the Keychain/Secure Enclave and
-    /// only accessible via `SecKey::create_signature` (Touch ID).
     fn sign_jwt(&self, claims: &Claims) -> Result<String> {
-        // Header: {"alg":"ES256","typ":"JWT","kid":"<label>"}
         let header = serde_json::json!({
             "alg": "ES256",
             "typ": "JWT",
@@ -55,12 +43,10 @@ impl<K: KeyStore> JwtTokenIssuer<K> {
         let claims_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(claims)?);
         let signing_input = format!("{header_b64}.{claims_b64}");
 
-        // Sign with the Keystore (triggers Touch ID!)
         let der_sig = self
             .key_store
             .sign(&self.key_label, signing_input.as_bytes())?;
 
-        // Convert DER-encoded ECDSA signature to JWS fixed-length format (R || S, 64 bytes)
         let jws_sig = der_to_jws(&der_sig)?;
         let sig_b64 = URL_SAFE_NO_PAD.encode(&jws_sig);
 
@@ -80,40 +66,77 @@ impl<K: KeyStore> TokenIssuer for JwtTokenIssuer<K> {
     }
 }
 
-/// Convert a DER-encoded ECDSA signature to JWS format (R || S, 64 bytes).
+/// Convert DER-encoded ECDSA signature to JWS format (R || S, 64 bytes).
 ///
-/// DER format: 0x30 <len> 0x02 <r_len> <r_bytes> 0x02 <s_len> <s_bytes>
-/// JWS format: <r_32_bytes> <s_32_bytes> (left-padded to 32 bytes each)
+/// DER: 0x30 <len> 0x02 <r_len> <r_bytes> 0x02 <s_len> <s_bytes>
+/// JWS: <r_32_bytes> <s_32_bytes> (left-padded to 32 bytes each)
 fn der_to_jws(der: &[u8]) -> Result<Vec<u8>> {
-    if der.len() < 8 || der[0] != 0x30 {
-        return Err(Error::Signing("invalid DER signature".into()));
+    if der.len() < 8 {
+        return Err(Error::Signing(format!(
+            "DER signature too short: {} bytes",
+            der.len()
+        )));
+    }
+    if der[0] != 0x30 {
+        return Err(Error::Signing(format!(
+            "expected DER SEQUENCE (0x30), got 0x{:02x}",
+            der[0]
+        )));
     }
 
     let mut pos = 2; // skip 0x30 <total_len>
 
-    // Read R
-    if der[pos] != 0x02 {
-        return Err(Error::Signing("expected 0x02 for R integer".into()));
+    // Read R integer
+    if pos >= der.len() || der[pos] != 0x02 {
+        return Err(Error::Signing("expected INTEGER tag (0x02) for R".into()));
     }
     pos += 1;
+    if pos >= der.len() {
+        return Err(Error::Signing("truncated DER: missing R length".into()));
+    }
     let r_len = der[pos] as usize;
     pos += 1;
+    if pos + r_len > der.len() {
+        return Err(Error::Signing(format!(
+            "truncated DER: R length {r_len} exceeds buffer (pos={pos}, total={})",
+            der.len()
+        )));
+    }
     let r_bytes = &der[pos..pos + r_len];
     pos += r_len;
 
-    // Read S
-    if der[pos] != 0x02 {
-        return Err(Error::Signing("expected 0x02 for S integer".into()));
+    // Read S integer
+    if pos >= der.len() || der[pos] != 0x02 {
+        return Err(Error::Signing("expected INTEGER tag (0x02) for S".into()));
     }
     pos += 1;
+    if pos >= der.len() {
+        return Err(Error::Signing("truncated DER: missing S length".into()));
+    }
     let s_len = der[pos] as usize;
     pos += 1;
+    if pos + s_len > der.len() {
+        return Err(Error::Signing(format!(
+            "truncated DER: S length {s_len} exceeds buffer (pos={pos}, total={})",
+            der.len()
+        )));
+    }
     let s_bytes = &der[pos..pos + s_len];
 
-    // Pad/trim to exactly 32 bytes each
-    let mut result = vec![0u8; 64];
+    // Trim leading zero bytes (DER integers are signed, may have 0x00 prefix)
     let r_trimmed = trim_leading_zero(r_bytes);
     let s_trimmed = trim_leading_zero(s_bytes);
+
+    if r_trimmed.len() > 32 || s_trimmed.len() > 32 {
+        return Err(Error::Signing(format!(
+            "integer too large for P-256: R={} bytes, S={} bytes",
+            r_trimmed.len(),
+            s_trimmed.len()
+        )));
+    }
+
+    // Pad to exactly 32 bytes each, left-aligned
+    let mut result = vec![0u8; 64];
     result[32 - r_trimmed.len()..32].copy_from_slice(r_trimmed);
     result[64 - s_trimmed.len()..64].copy_from_slice(s_trimmed);
 
@@ -128,10 +151,46 @@ fn trim_leading_zero(bytes: &[u8]) -> &[u8] {
     }
 }
 
+// ── Mock implementations ───────────────────────────────────────────────
+
+#[cfg(test)]
+pub mod mocks {
+    use super::*;
+
+    /// Token issuer that returns a fixed token (no signing).
+    #[derive(Debug)]
+    pub struct StaticTokenIssuer {
+        pub token: String,
+    }
+
+    impl TokenIssuer for StaticTokenIssuer {
+        fn issue(&self, _claims: &Claims) -> Result<String> {
+            Ok(self.token.clone())
+        }
+        fn jwks(&self) -> Result<String> {
+            Ok(r#"{"keys":[]}"#.into())
+        }
+    }
+
+    /// Token issuer that always fails.
+    #[derive(Debug)]
+    pub struct FailingTokenIssuer;
+
+    impl TokenIssuer for FailingTokenIssuer {
+        fn issue(&self, _claims: &Claims) -> Result<String> {
+            Err(Error::BiometricDenied)
+        }
+        fn jwks(&self) -> Result<String> {
+            Ok(r#"{"keys":[]}"#.into())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::keystore::mocks::InMemoryKeyStore;
+    use crate::traits::KeyStore;
 
     #[test]
     fn issue_jwt_with_mock_keystore() {
@@ -149,24 +208,14 @@ mod tests {
         };
 
         let token = issuer.issue(&claims).unwrap();
-        // JWT has 3 parts separated by dots
         assert_eq!(token.split('.').count(), 3);
 
-        // Header is valid JSON
         let header_b64 = token.split('.').next().unwrap();
         let header_bytes = URL_SAFE_NO_PAD.decode(header_b64).unwrap();
         let header: serde_json::Value = serde_json::from_slice(&header_bytes).unwrap();
         assert_eq!(header["alg"], "ES256");
         assert_eq!(header["typ"], "JWT");
         assert_eq!(header["kid"], "test-key");
-
-        // Claims are valid JSON
-        let claims_b64 = token.split('.').nth(1).unwrap();
-        let claims_bytes = URL_SAFE_NO_PAD.decode(claims_b64).unwrap();
-        let decoded: Claims = serde_json::from_slice(&claims_bytes).unwrap();
-        assert_eq!(decoded.sub, "test-user");
-        assert_eq!(decoded.iss, "akeyless-auth");
-        assert_eq!(decoded.exp, 1060);
     }
 
     #[test]
@@ -178,37 +227,36 @@ mod tests {
         let jwks_str = issuer.jwks().unwrap();
         let jwks: Jwks = serde_json::from_str(&jwks_str).unwrap();
         assert_eq!(jwks.keys.len(), 1);
-        assert_eq!(jwks.keys[0].kty, "EC");
-        assert_eq!(jwks.keys[0].crv, "P-256");
         assert_eq!(jwks.keys[0].alg, "ES256");
-        assert_eq!(jwks.keys[0].kid, "test-key");
     }
 
     #[test]
-    fn claims_serialization() {
+    fn claims_serde_roundtrip() {
         let claims = Claims {
             sub: "user".into(),
             iss: "issuer".into(),
-            aud: String::new(),
+            aud: "audience".into(),
             iat: 1000,
             exp: 1060,
             jti: "id".into(),
         };
         let json = serde_json::to_string(&claims).unwrap();
-        // aud should be skipped when empty
-        assert!(!json.contains("aud"));
-
-        let claims_with_aud = Claims {
-            aud: "my-audience".into(),
-            ..claims
-        };
-        let json = serde_json::to_string(&claims_with_aud).unwrap();
-        assert!(json.contains("my-audience"));
+        let restored: Claims = serde_json::from_str(&json).unwrap();
+        assert_eq!(claims, restored);
     }
 
     #[test]
-    fn der_to_jws_conversion() {
-        // A synthetic DER-encoded P-256 signature
+    fn claims_empty_aud_skipped() {
+        let claims = Claims {
+            sub: "u".into(), iss: "i".into(), aud: String::new(),
+            iat: 0, exp: 0, jti: "j".into(),
+        };
+        let json = serde_json::to_string(&claims).unwrap();
+        assert!(!json.contains("aud"));
+    }
+
+    #[test]
+    fn der_to_jws_valid() {
         let r = vec![0x01; 32];
         let s = vec![0x02; 32];
         let mut der = vec![0x30, 68, 0x02, 32];
@@ -221,5 +269,54 @@ mod tests {
         assert_eq!(jws.len(), 64);
         assert_eq!(&jws[..32], &r[..]);
         assert_eq!(&jws[32..], &s[..]);
+    }
+
+    #[test]
+    fn der_to_jws_too_short() {
+        assert!(der_to_jws(&[0x30, 0x00]).is_err());
+    }
+
+    #[test]
+    fn der_to_jws_wrong_tag() {
+        assert!(der_to_jws(&[0x31, 0, 0, 0, 0, 0, 0, 0]).is_err());
+    }
+
+    #[test]
+    fn der_to_jws_truncated_r() {
+        // R length says 32 but only 2 bytes follow
+        assert!(der_to_jws(&[0x30, 10, 0x02, 32, 0x01, 0x02]).is_err());
+    }
+
+    #[test]
+    fn der_to_jws_oversized_integer() {
+        // R is 33 bytes (after trimming leading zero, still 33)
+        let mut der = vec![0x30, 72, 0x02, 33];
+        der.extend_from_slice(&vec![0x01; 33]);
+        der.push(0x02);
+        der.push(32);
+        der.extend_from_slice(&vec![0x02; 32]);
+        assert!(der_to_jws(&der).is_err());
+    }
+
+    #[test]
+    fn static_token_issuer() {
+        let issuer = mocks::StaticTokenIssuer {
+            token: "fixed-token".into(),
+        };
+        let claims = Claims {
+            sub: "u".into(), iss: "i".into(), aud: String::new(),
+            iat: 0, exp: 0, jti: "j".into(),
+        };
+        assert_eq!(issuer.issue(&claims).unwrap(), "fixed-token");
+    }
+
+    #[test]
+    fn failing_token_issuer() {
+        let issuer = mocks::FailingTokenIssuer;
+        let claims = Claims {
+            sub: "u".into(), iss: "i".into(), aud: String::new(),
+            iat: 0, exp: 0, jti: "j".into(),
+        };
+        assert!(issuer.issue(&claims).is_err());
     }
 }

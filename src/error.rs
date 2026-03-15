@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
+#[allow(dead_code)] // Variants are public API, not all used in the binary yet
 pub enum Error {
     #[error("keystore error: {0}")]
     KeyStore(String),
@@ -10,9 +11,6 @@ pub enum Error {
 
     #[error("key not found: {label}")]
     KeyNotFound { label: String },
-
-    #[error("JWT error: {0}")]
-    Jwt(#[from] jsonwebtoken::errors::Error),
 
     #[error("socket error: {0}")]
     Socket(#[from] std::io::Error),
@@ -31,6 +29,9 @@ pub enum Error {
 
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
+
+    #[error("daemon error: {0}")]
+    Daemon(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
