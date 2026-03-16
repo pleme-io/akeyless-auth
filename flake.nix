@@ -23,9 +23,7 @@
         pname = "akeyless-auth";
         version = "0.1.0";
         src = ./.;
-        useFetchCargoVendor = true;
-        cargoHash = "";
-        buildInputs = [ pkgs.darwin.apple_sdk.frameworks.Security ];
+        cargoHash = "sha256-yKnl+IOEOzOYr7zYNo/UlG1OkmGueNbqScRK8q517hU=";
         meta = {
           description = "Biometric-gated Akeyless authentication";
           homepage = "https://github.com/pleme-io/akeyless-auth";
@@ -47,7 +45,6 @@
         buildInputs = [
           pkgs.rustc
           pkgs.cargo
-          pkgs.darwin.apple_sdk.frameworks.Security
         ];
       };
 
