@@ -2,7 +2,9 @@
   description = "akeyless-auth — biometric-gated Akeyless authentication (Touch ID for every secret access)";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-25.11";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
+    crate2nix.url = "github:nix-community/crate2nix";
+    flake-utils.url = "github:numtide/flake-utils";
     substrate = {
       url = "github:pleme-io/substrate";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -13,41 +15,19 @@
     {
       self,
       nixpkgs,
+      crate2nix,
+      flake-utils,
       substrate,
-      ...
     }:
-    let
-      system = "aarch64-darwin";
-      pkgs = import nixpkgs { inherit system; };
-      package = pkgs.rustPlatform.buildRustPackage {
-        pname = "akeyless-auth";
-        version = "0.1.0";
-        src = ./.;
-        cargoHash = "sha256-yKnl+IOEOzOYr7zYNo/UlG1OkmGueNbqScRK8q517hU=";
-        meta = {
-          description = "Biometric-gated Akeyless authentication";
-          homepage = "https://github.com/pleme-io/akeyless-auth";
-          license = pkgs.lib.licenses.mit;
-          platforms = [ "aarch64-darwin" "x86_64-darwin" ];
-        };
-      };
-    in
-    {
-      packages.${system}.default = package;
-
-      overlays.default = final: prev: {
-        akeyless-auth = self.packages.${final.system}.default;
-      };
-
+    (import "${substrate}/lib/rust-tool-release-flake.nix" {
+      inherit nixpkgs crate2nix flake-utils;
+    }) {
+      toolName = "akeyless-auth";
+      systems = [ "aarch64-darwin" "x86_64-darwin" ];
+      src = self;
+      repo = "pleme-io/akeyless-auth";
+    }
+    // {
       homeManagerModules.default = import ./module;
-
-      devShells.${system}.default = pkgs.mkShellNoCC {
-        buildInputs = [
-          pkgs.rustc
-          pkgs.cargo
-        ];
-      };
-
-      formatter.${system} = pkgs.nixfmt-tree;
     };
 }
